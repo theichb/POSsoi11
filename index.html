@@ -8,8 +8,8 @@
 <!-- PWA: installable app, home-screen icon, standalone window -->
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#0E6E5C">
-<link rel="icon" href="./icons/icon-192.png" type="image/png">
-<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="./icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Counter">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -97,7 +97,7 @@
     position:sticky;top:0;z-index:20;
     display:flex;align-items:center;justify-content:space-between;
     gap:.75rem;
-    padding:.85rem 1rem;
+    padding:calc(.85rem + env(safe-area-inset-top)) 1rem .85rem;
     background:var(--bg);
     border-bottom:1px solid var(--line);
   }
@@ -201,6 +201,12 @@
   }
   .product-card:active{transform:scale(.97);}
   .product-card:disabled{cursor:not-allowed;opacity:.55;}
+  .pc-photo{
+    width:100%;height:76px;border-radius:var(--radius-s);overflow:hidden;
+    background:var(--surface-2);display:flex;align-items:center;justify-content:center;flex:none;
+  }
+  .pc-photo img{width:100%;height:100%;object-fit:cover;display:block;}
+  .pc-photo .ph-fallback{font-family:'Fraunces',serif;font-weight:600;font-size:1.3rem;color:var(--ink-dim);}
   .pc-top{display:flex;flex-direction:column;gap:.15rem;}
   .pc-name{font-weight:700;font-size:.94rem;line-height:1.2;}
   .pc-meta{font-size:.72rem;color:var(--ink-dim);}
@@ -278,6 +284,12 @@
   }
   .stock-row.low{border-left-color:var(--warn);}
   .stock-row.out{border-left-color:var(--danger);}
+  .sr-photo{
+    width:2.6rem;height:2.6rem;border-radius:var(--radius-s);overflow:hidden;flex:none;
+    background:var(--surface-2);display:flex;align-items:center;justify-content:center;
+  }
+  .sr-photo img{width:100%;height:100%;object-fit:cover;display:block;}
+  .sr-photo .ph-fallback{font-family:'Fraunces',serif;font-weight:600;font-size:1rem;color:var(--ink-dim);}
   .sr-info{flex:1;min-width:0;}
   .sr-name{font-weight:700;font-size:.92rem;display:flex;align-items:center;gap:.4rem;}
   .sr-example{font-size:.62rem;font-weight:700;color:var(--ink-dim);background:var(--surface-2);padding:.05rem .4rem;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;}
@@ -350,6 +362,15 @@
   .modal h3{font-size:1.15rem;margin-bottom:.9rem;}
   .modal-actions{display:flex;gap:.6rem;margin-top:.4rem;}
   .modal-actions .btn{flex:1;}
+  .photo-picker{display:flex;align-items:center;gap:.8rem;}
+  .photo-preview{
+    width:4.4rem;height:4.4rem;border-radius:var(--radius-m);overflow:hidden;flex:none;
+    background:var(--surface-2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;
+  }
+  .photo-preview img{width:100%;height:100%;object-fit:cover;display:block;}
+  .photo-preview .ph-fallback{font-family:'Fraunces',serif;font-weight:600;font-size:1.5rem;color:var(--ink-dim);}
+  .photo-picker-actions{display:flex;flex-direction:column;gap:.4rem;flex:1;}
+  .photo-picker-actions .btn{padding:.5rem .8rem;font-size:.82rem;}
 
   /* ---------- toast ---------- */
   .toast{
@@ -589,8 +610,48 @@
     return {
       id: row.id, name: row.name, category: row.category, unit: row.unit,
       price: Number(row.price), stock: row.stock, lowStock: row.low_stock,
-      isExample: !!row.is_example
+      isExample: !!row.is_example, photoPath: row.photo_path || null
     };
+  }
+
+  function photoUrl(path){
+    if(!path) return null;
+    try{
+      var r = supabase.storage.from("product-photos").getPublicUrl(path);
+      return (r && r.data && r.data.publicUrl) || null;
+    }catch(e){ return null; }
+  }
+
+  function photoThumbHtml(p, cls){
+    var url = photoUrl(p.photoPath);
+    var initial = escapeHtml((p.name||"?").trim().charAt(0).toUpperCase());
+    return url
+      ? '<div class="'+cls+'"><img src="'+url+'" alt="" loading="lazy" onerror="this.parentElement.innerHTML=\'<span class=&quot;ph-fallback&quot;>'+initial+'</span>\'"></div>'
+      : '<div class="'+cls+'"><span class="ph-fallback">'+initial+'</span></div>';
+  }
+
+  function compressImage(file, maxDim, quality){
+    return new Promise(function(resolve, reject){
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function(){
+        URL.revokeObjectURL(url);
+        var w = img.naturalWidth, h = img.naturalHeight;
+        if(!w || !h){ reject(new Error("bad image")); return; }
+        var scale = Math.min(1, maxDim / Math.max(w, h));
+        var cw = Math.max(1, Math.round(w * scale));
+        var ch = Math.max(1, Math.round(h * scale));
+        var canvas = document.createElement("canvas");
+        canvas.width = cw; canvas.height = ch;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, cw, ch);
+        canvas.toBlob(function(blob){
+          if(blob) resolve(blob); else reject(new Error("compression failed"));
+        }, "image/jpeg", quality);
+      };
+      img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error("couldn't load image")); };
+      img.src = url;
+    });
   }
   function mapSale(row){
     return { id: row.id, items: row.items||[], total: Number(row.total), itemCount: row.item_count, createdAt: row.created_at, soldBy: row.sold_by || "" };
@@ -645,6 +706,7 @@
       card.type = "button";
       card.disabled = remaining<=0;
       card.innerHTML =
+        photoThumbHtml(p, "pc-photo")+
         '<div class="pc-top"><div class="pc-name">'+escapeHtml(p.name)+'</div>'+
         '<div class="pc-meta">'+escapeHtml(p.category)+' · per '+escapeHtml(p.unit)+'</div></div>'+
         '<div class="pc-bottom"><span class="pc-price mono">'+money(p.price)+'</span>'+
@@ -778,6 +840,7 @@
       var row = document.createElement("div");
       row.className = "stock-row"+(out?" out":low?" low":"");
       row.innerHTML =
+        photoThumbHtml(p, "sr-photo")+
         '<div class="sr-info"><div class="sr-name">'+escapeHtml(p.name)+(p.isExample?'<span class="sr-example">Example</span>':'')+'</div>'+
         '<div class="sr-meta">'+escapeHtml(p.category)+' · per '+escapeHtml(p.unit)+'</div></div>'+
         '<div class="sr-price mono">'+money(p.price)+'</div>'+
@@ -879,9 +942,24 @@
     var p = existingId ? byId(existingId) : null;
     var scrim = document.getElementById("modalScrim");
     var body = document.getElementById("modalBody");
+    var existingPhotoUrl = p ? photoUrl(p.photoPath) : null;
+    var initial = escapeHtml((p&&p.name?p.name:"?").trim().charAt(0).toUpperCase() || "?");
     body.innerHTML =
       '<h3>'+(p?"Edit product":"New product")+'</h3>'+
       '<form id="productForm">'+
+        '<div class="field" style="margin-bottom:.7rem;">'+
+          '<label>Photo</label>'+
+          '<div class="photo-picker">'+
+            '<div class="photo-preview" id="pf-photo-preview">'+
+              (existingPhotoUrl ? '<img src="'+existingPhotoUrl+'" alt="">' : '<span class="ph-fallback">'+initial+'</span>')+
+            '</div>'+
+            '<div class="photo-picker-actions">'+
+              '<input type="file" id="pf-photo-input" accept="image/*" capture="environment" style="display:none;">'+
+              '<button type="button" class="btn" id="pf-photo-choose">'+(existingPhotoUrl?"Change photo":"Add photo")+'</button>'+
+              '<button type="button" class="btn ghost" id="pf-photo-remove" style="'+(existingPhotoUrl?"":"display:none;")+'">Remove photo</button>'+
+            '</div>'+
+          '</div>'+
+        '</div>'+
         '<div class="field" style="margin-bottom:.7rem;"><label>Name</label><input type="text" id="pf-name" required value="'+(p?escapeHtml(p.name):"")+'"></div>'+
         '<div class="field-row" style="margin-bottom:.7rem;">'+
           '<div class="field"><label>Category</label><input type="text" id="pf-category" required value="'+(p?escapeHtml(p.category):"")+'"></div>'+
@@ -894,13 +972,46 @@
         '<div class="field" style="margin-bottom:.4rem;"><label>Low stock alert at</label><input type="number" id="pf-low" min="0" step="1" required value="'+(p?p.lowStock:3)+'"></div>'+
         '<div class="modal-actions">'+
           (p?'<button type="button" class="btn" id="pf-delete">Delete</button>':'<button type="button" class="btn ghost" id="pf-cancel">Cancel</button>')+
-          '<button type="submit" class="btn primary">Save</button>'+
+          '<button type="submit" class="btn primary" id="pf-save">Save</button>'+
         '</div>'+
       '</form>';
     scrim.classList.add("show");
 
+    var pendingPhotoBlob = null;
+    var removePhoto = false;
+    var currentPhotoPath = p ? p.photoPath : null;
+
+    var photoInput = document.getElementById("pf-photo-input");
+    var photoPreview = document.getElementById("pf-photo-preview");
+    var removeBtn = document.getElementById("pf-photo-remove");
+
+    document.getElementById("pf-photo-choose").addEventListener("click", function(){ photoInput.click(); });
+    photoInput.addEventListener("change", async function(){
+      var file = photoInput.files && photoInput.files[0];
+      if(!file) return;
+      try{
+        var blob = await compressImage(file, 900, 0.75);
+        pendingPhotoBlob = blob;
+        removePhoto = false;
+        photoPreview.innerHTML = '<img src="'+URL.createObjectURL(blob)+'" alt="">';
+        removeBtn.style.display = "";
+      }catch(e){
+        console.error(e);
+        toast("Couldn't read that photo — try another");
+      }
+    });
+    removeBtn.addEventListener("click", function(){
+      pendingPhotoBlob = null;
+      removePhoto = true;
+      photoPreview.innerHTML = '<span class="ph-fallback">'+initial+'</span>';
+      removeBtn.style.display = "none";
+      photoInput.value = "";
+    });
+
     document.getElementById("productForm").addEventListener("submit", async function(ev){
       ev.preventDefault();
+      var saveBtn = document.getElementById("pf-save");
+      saveBtn.disabled = true;
       var data = {
         name: document.getElementById("pf-name").value.trim(),
         category: document.getElementById("pf-category").value.trim() || "General",
@@ -909,6 +1020,30 @@
         stock: parseInt(document.getElementById("pf-stock").value,10) || 0,
         low_stock: parseInt(document.getElementById("pf-low").value,10) || 0
       };
+
+      if(pendingPhotoBlob){
+        var fileName = (existingId||"new")+"-"+Date.now()+".jpg";
+        try{
+          var up = await supabase.storage.from("product-photos")
+            .upload(fileName, pendingPhotoBlob, { contentType:"image/jpeg", upsert:true });
+          if(up.error) throw up.error;
+          data.photo_path = fileName;
+          if(currentPhotoPath && currentPhotoPath!==fileName){
+            supabase.storage.from("product-photos").remove([currentPhotoPath]).catch(function(){});
+          }
+        }catch(e){
+          console.error(e);
+          toast("Couldn't upload the photo — check your connection");
+          saveBtn.disabled = false;
+          return;
+        }
+      } else if(removePhoto){
+        data.photo_path = null;
+        if(currentPhotoPath){
+          supabase.storage.from("product-photos").remove([currentPhotoPath]).catch(function(){});
+        }
+      }
+
       await saveProduct(data, existingId);
       closeModal();
     });
@@ -916,6 +1051,9 @@
     if(cancelBtn) cancelBtn.addEventListener("click", closeModal);
     var delBtn = document.getElementById("pf-delete");
     if(delBtn) delBtn.addEventListener("click", async function(){
+      if(p && p.photoPath){
+        supabase.storage.from("product-photos").remove([p.photoPath]).catch(function(){});
+      }
       await deleteProduct(existingId);
       closeModal();
     });
