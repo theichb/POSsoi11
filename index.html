@@ -212,6 +212,7 @@
   .pc-meta{font-size:.72rem;color:var(--ink-dim);}
   .pc-bottom{display:flex;align-items:center;justify-content:space-between;margin-top:auto;}
   .pc-price{font-weight:600;font-size:.95rem;}
+  .pc-hint{font-size:.72rem;font-weight:600;color:var(--ink-dim);}
   .stock-pill{font-size:.68rem;font-weight:700;padding:.2rem .5rem;border-radius:999px;background:var(--accent-soft);color:var(--accent);white-space:nowrap;}
   .stock-pill.low{background:var(--warn-soft);color:var(--warn);}
   .stock-pill.out{background:var(--danger-soft);color:var(--danger);}
@@ -295,6 +296,7 @@
   .sr-example{font-size:.62rem;font-weight:700;color:var(--ink-dim);background:var(--surface-2);padding:.05rem .4rem;border-radius:999px;text-transform:uppercase;letter-spacing:.03em;}
   .sr-meta{font-size:.75rem;color:var(--ink-dim);}
   .sr-price{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:.85rem;width:4rem;text-align:right;flex:none;}
+  .sr-price-lbl{display:block;font-family:'Manrope',sans-serif;font-weight:500;font-size:.62rem;color:var(--ink-dim);}
   .sr-stock{width:4.6rem;text-align:right;flex:none;}
   .sr-stock .n{font-family:'IBM Plex Mono',monospace;font-weight:700;}
   .sr-stock .lbl{display:block;font-size:.65rem;color:var(--ink-dim);}
@@ -360,6 +362,7 @@
   }
   @media (min-width:640px){.modal{border-radius:var(--radius-l);}}
   .modal h3{font-size:1.15rem;margin-bottom:.9rem;}
+  .sf-hint{font-size:.78rem;color:var(--ink-dim);margin:-.15rem 0 .8rem;}
   .modal-actions{display:flex;gap:.6rem;margin-top:.4rem;}
   .modal-actions .btn{flex:1;}
   .photo-picker{display:flex;align-items:center;gap:.8rem;}
@@ -609,9 +612,14 @@
   function mapProduct(row){
     return {
       id: row.id, name: row.name, category: row.category, unit: row.unit,
-      price: Number(row.price), stock: row.stock, lowStock: row.low_stock,
+      costPrice: Number(row.cost_price), stock: row.stock, lowStock: row.low_stock,
       isExample: !!row.is_example, photoPath: row.photo_path || null
     };
+  }
+
+  function makeLineId(){
+    if(window.crypto && typeof crypto.randomUUID==="function") return crypto.randomUUID();
+    return "l"+Date.now()+Math.random().toString(36).slice(2);
   }
 
   function photoUrl(path){
@@ -680,8 +688,7 @@
   }
 
   function cartQty(id){
-    var line = state.cart.find(function(c){return c.id===id;});
-    return line ? line.qty : 0;
+    return state.cart.reduce(function(s,c){ return c.id===id ? s+c.qty : s; },0);
   }
 
   function renderProducts(){
@@ -709,9 +716,9 @@
         photoThumbHtml(p, "pc-photo")+
         '<div class="pc-top"><div class="pc-name">'+escapeHtml(p.name)+'</div>'+
         '<div class="pc-meta">'+escapeHtml(p.category)+' · per '+escapeHtml(p.unit)+'</div></div>'+
-        '<div class="pc-bottom"><span class="pc-price mono">'+money(p.price)+'</span>'+
+        '<div class="pc-bottom"><span class="pc-hint">Tap to sell</span>'+
         '<span class="stock-pill'+(out?' out':low?' low':'')+'">'+(out?'Out':remaining+' left')+'</span></div>';
-      card.addEventListener("click", function(){ addToCart(p.id); });
+      card.addEventListener("click", function(){ openSaleEntryModal(p.id); });
       grid.appendChild(card);
     });
   }
@@ -723,23 +730,67 @@
   }
 
   /* ---------------- cart ---------------- */
-  function addToCart(id){
+  function openSaleEntryModal(id){
     var p = byId(id);
     if(!p) return;
     var remaining = p.stock - cartQty(id);
     if(remaining<=0){ toast("Only "+p.stock+" "+p.unit+(p.stock===1?"":"s")+" in stock"); return; }
-    var line = state.cart.find(function(c){return c.id===id;});
-    if(line) line.qty++; else state.cart.push({id:p.id,name:p.name,price:p.price,unit:p.unit,qty:1});
+
+    var scrim = document.getElementById("modalScrim");
+    var body = document.getElementById("modalBody");
+    body.innerHTML =
+      '<h3>'+escapeHtml(p.name)+'</h3>'+
+      '<form id="saleEntryForm">'+
+        '<div class="field-row" style="margin-bottom:.35rem;">'+
+          '<div class="field"><label>Price (฿)</label><input type="number" id="sf-price" min="0" step="0.01" inputmode="decimal" placeholder="0.00" required></div>'+
+          '<div class="field"><label>Quantity</label><input type="number" id="sf-qty" min="1" step="1" max="'+remaining+'" value="1" required></div>'+
+        '</div>'+
+        '<p class="sf-hint">'+remaining+' '+escapeHtml(p.unit)+(remaining===1?'':'s')+' in stock</p>'+
+        '<div class="modal-actions">'+
+          '<button type="button" class="btn ghost" id="sf-cancel">Cancel</button>'+
+          '<button type="submit" class="btn primary">Add to cart</button>'+
+        '</div>'+
+      '</form>';
+    scrim.classList.add("show");
+
+    var priceInput = document.getElementById("sf-price");
+    setTimeout(function(){ priceInput.focus(); }, 50);
+
+    document.getElementById("sf-cancel").addEventListener("click", closeModal);
+    document.getElementById("saleEntryForm").addEventListener("submit", function(ev){
+      ev.preventDefault();
+      var price = parseFloat(document.getElementById("sf-price").value);
+      var qty = parseInt(document.getElementById("sf-qty").value,10);
+      if(isNaN(price) || price<0){ toast("Enter a price"); return; }
+      if(!qty || qty<1){ toast("Enter a quantity"); return; }
+      var already = cartQty(id);
+      if(already+qty > p.stock){
+        var left = Math.max(0, p.stock-already);
+        toast("Only "+left+" "+p.unit+(left===1?"":"s")+" left");
+        return;
+      }
+      addCartLine(id, price, qty);
+      closeModal();
+    });
+  }
+
+  function addCartLine(id, price, qty){
+    var p = byId(id);
+    if(!p) return;
+    var existing = state.cart.find(function(c){ return c.id===id && c.price===price; });
+    if(existing) existing.qty += qty;
+    else state.cart.push({ lineId: makeLineId(), id: p.id, name: p.name, price: price, unit: p.unit, qty: qty });
     renderCart(); renderProducts();
   }
 
-  function changeQty(id, delta){
-    var line = state.cart.find(function(c){return c.id===id;});
+  function changeQty(lineId, delta){
+    var line = state.cart.find(function(c){return c.lineId===lineId;});
     if(!line) return;
-    var p = byId(id);
+    var p = byId(line.id);
+    var otherQty = cartQty(line.id) - line.qty;
     var next = line.qty + delta;
-    if(next<=0){ state.cart = state.cart.filter(function(c){return c.id!==id;}); }
-    else if(p && next > p.stock){ toast("Only "+p.stock+" in stock"); return; }
+    if(next<=0){ state.cart = state.cart.filter(function(c){return c.lineId!==lineId;}); }
+    else if(p && (otherQty+next) > p.stock){ toast("Only "+p.stock+" in stock"); return; }
     else { line.qty = next; }
     renderCart(); renderProducts();
   }
@@ -764,8 +815,8 @@
             '<button type="button" data-act="plus" aria-label="Increase">+</button>'+
           '</div>'+
           '<div class="cl-total mono">'+money(c.price*c.qty)+'</div>';
-        row.querySelector('[data-act="minus"]').addEventListener("click", function(){ changeQty(c.id,-1); });
-        row.querySelector('[data-act="plus"]').addEventListener("click", function(){ changeQty(c.id,1); });
+        row.querySelector('[data-act="minus"]').addEventListener("click", function(){ changeQty(c.lineId,-1); });
+        row.querySelector('[data-act="plus"]').addEventListener("click", function(){ changeQty(c.lineId,1); });
         items.appendChild(row);
       });
     }
@@ -803,11 +854,14 @@
       });
       if(saleErr) throw saleErr;
 
-      for(var i=0;i<cartSnapshot.length;i++){
-        var c = cartSnapshot[i];
-        var p = byId(c.id);
-        var newStock = Math.max(0, (p?p.stock:0) - c.qty);
-        var { error: stockErr } = await supabase.from("products").update({stock:newStock}).eq("id", c.id);
+      var qtyByProduct = {};
+      cartSnapshot.forEach(function(c){ qtyByProduct[c.id] = (qtyByProduct[c.id]||0) + c.qty; });
+      var productIds = Object.keys(qtyByProduct);
+      for(var i=0;i<productIds.length;i++){
+        var pid = productIds[i];
+        var p = byId(pid);
+        var newStock = Math.max(0, (p?p.stock:0) - qtyByProduct[pid]);
+        var { error: stockErr } = await supabase.from("products").update({stock:newStock}).eq("id", pid);
         if(stockErr) console.warn(stockErr);
       }
 
@@ -843,7 +897,7 @@
         photoThumbHtml(p, "sr-photo")+
         '<div class="sr-info"><div class="sr-name">'+escapeHtml(p.name)+(p.isExample?'<span class="sr-example">Example</span>':'')+'</div>'+
         '<div class="sr-meta">'+escapeHtml(p.category)+' · per '+escapeHtml(p.unit)+'</div></div>'+
-        '<div class="sr-price mono">'+money(p.price)+'</div>'+
+        '<div class="sr-price mono">'+money(p.costPrice)+'<span class="sr-price-lbl">cost</span></div>'+
         '<div class="sr-stock'+(out?' out':low?' low':'')+'"><span class="n mono">'+p.stock+'</span><span class="lbl">'+(out?"out":low?"low":"in stock")+'</span></div>';
       row.addEventListener("click", function(){ openProductModal(p.id); });
       list.appendChild(row);
@@ -966,7 +1020,7 @@
           '<div class="field"><label>Unit</label><input type="text" id="pf-unit" required placeholder="e.g. bottle" value="'+(p?escapeHtml(p.unit):"")+'"></div>'+
         '</div>'+
         '<div class="field-row" style="margin-bottom:.7rem;">'+
-          '<div class="field"><label>Price (฿)</label><input type="number" id="pf-price" min="0" step="0.01" required value="'+(p?p.price:"")+'"></div>'+
+          '<div class="field"><label>Cost price (฿)</label><input type="number" id="pf-cost" min="0" step="0.01" required value="'+(p?p.costPrice:"")+'"></div>'+
           '<div class="field"><label>Stock</label><input type="number" id="pf-stock" min="0" step="1" required value="'+(p?p.stock:0)+'"></div>'+
         '</div>'+
         '<div class="field" style="margin-bottom:.4rem;"><label>Low stock alert at</label><input type="number" id="pf-low" min="0" step="1" required value="'+(p?p.lowStock:3)+'"></div>'+
@@ -1016,7 +1070,7 @@
         name: document.getElementById("pf-name").value.trim(),
         category: document.getElementById("pf-category").value.trim() || "General",
         unit: document.getElementById("pf-unit").value.trim() || "unit",
-        price: parseFloat(document.getElementById("pf-price").value) || 0,
+        cost_price: parseFloat(document.getElementById("pf-cost").value) || 0,
         stock: parseInt(document.getElementById("pf-stock").value,10) || 0,
         low_stock: parseInt(document.getElementById("pf-low").value,10) || 0
       };
